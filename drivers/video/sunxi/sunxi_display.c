@@ -1068,6 +1068,53 @@ static bool sunxi_has_composite(void)
 #endif
 }
 
+static void sunxi_kd027_write_lcd(struct gpio_desc *sda, struct gpio_desc *sck, u8 data)
+{
+	int i;
+
+	for (i = 0; i < 8; i++) {
+		dm_gpio_set_value(sda, !!(data & 0x80));
+		dm_gpio_set_value(sck, 0);
+		dm_gpio_set_value(sck, 1);
+		data <<= 1;
+	}
+}
+
+static void sunxi_gameshell_lcd_init(void)
+{
+	struct gpio_desc rst, cs, sck, sda;
+	int node, len, i;
+	const u8 *seq;
+
+	node = fdt_path_offset(gd->fdt_blob, "/lcd");
+	if (node < 0)
+		return;
+
+	seq = fdt_getprop(gd->fdt_blob, node, "init-seq", &len);
+	if (!seq || len < 2)
+		return;
+
+	if (gpio_request_by_name_nodev(offset_to_ofnode(node), "lcd-rst-gpios", 0, &rst, GPIOD_IS_OUT) ||
+	    gpio_request_by_name_nodev(offset_to_ofnode(node), "lcd-cs-gpios", 0, &cs, GPIOD_IS_OUT) ||
+	    gpio_request_by_name_nodev(offset_to_ofnode(node), "lcd-sck-gpios", 0, &sck, GPIOD_IS_OUT) ||
+	    gpio_request_by_name_nodev(offset_to_ofnode(node), "lcd-sda-gpios", 0, &sda, GPIOD_IS_OUT)) {
+		printf("Error: GameShell LCD GPIOs missing in DT\n");
+		return;
+	}
+
+	dm_gpio_set_value(&rst, 0);
+	mdelay(10);
+	dm_gpio_set_value(&rst, 1);
+	mdelay(10);
+
+	for (i = 0; i < len / 2; i++) {
+		dm_gpio_set_value(&cs, 0);
+		sunxi_kd027_write_lcd(&sda, &sck, seq[i * 2]);
+		sunxi_kd027_write_lcd(&sda, &sck, seq[i * 2 + 1]);
+		dm_gpio_set_value(&cs, 1);
+	}
+}
+
 static enum sunxi_monitor sunxi_get_default_mon(bool allow_hdmi)
 {
 	if (allow_hdmi && sunxi_has_hdmi())
@@ -1217,6 +1264,9 @@ static int sunxi_de_probe(struct udevice *dev)
 
 	sunxi_display->fb_addr = plat->base;
 	sunxi_engines_init();
+
+	if (sunxi_display->monitor == sunxi_monitor_lcd)
+		sunxi_gameshell_lcd_init();
 
 #ifdef CONFIG_EFI_LOADER
 	efi_add_memory_map(sunxi_display->fb_addr, sunxi_display->fb_size,
